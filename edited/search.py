@@ -4,6 +4,10 @@ import json
 from math import ceil
 from pathlib import Path
 
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
 
 def load_data(location: Path) -> list:
     with open(location) as data_source:
@@ -24,7 +28,7 @@ class Result:
         return self.__str__()
 
 
-def search(data, search_term):
+def super_simple_search(data, search_term):
     """A function that does our search on a set of data and returns results"""
     # Super simple search function to help test things first
     results = []
@@ -38,6 +42,38 @@ def search(data, search_term):
                 score += 5
             if term in item["name"]:
                 score += 5
+
+        if score > 0:
+            results.append(Result(item, score))
+
+    return results
+
+
+def nlp_search(data, search_term):
+    """Use natural language processing to grab the search terms"""
+    # Find named entities, phrases and concepts
+    doc = nlp(search_term)
+
+    results = []
+    for item in data:
+        # If we can check out an entity that we know, look for it in brands
+        entities = []
+        score = 0
+        for entity in doc.ents:
+            entities.append(str(entity))
+
+        for entity in entities:
+            if entity in item["brand"]:
+                score += 10
+
+        tokens = [str(token.text) for token in doc]
+        # If we know any entities, exclude them, or we'll pick up all products mentioning brands too
+        tokens = [t for t in tokens if t not in entities]
+
+        # Execute an ANDed search, so we don't return OR items
+        for token in doc:
+            if str(token.text) in item["name"]:
+                score += 8
 
         if score > 0:
             results.append(Result(item, score))
@@ -75,21 +111,33 @@ if __name__ == "__main__":
         dest="data",
         default="./search_dataset.json"
     )
+    parser.add_argument(
+        "--json", "-j",
+        required=False,
+        default=False,
+        dest="json",
+        action="store_true",
+        help="Output data as json"
+    )
 
     args = parser.parse_args()
-    print(args)
-    
-    data = load_data(Path(args.data))
 
-    # print(data)
+    data = load_data(Path(args.data))
 
     # Relink up search term (we might want to reprocess it)
     search_term = " ".join(args.search)
 
     # Batch process the search
-    results = batch_search(search_term, data, search, 10000)
+    results = batch_search(search_term, data, nlp_search, 10000)
+
+    # Perform a cut to get rid of extrandeous results
+    results = [r for r in results if r.score > 10]
 
     # Sort the actual results
-    results.sort(key=lambda x: x.score)
+    results.sort(reverse=True, key=lambda x: x.score)
 
-    print(results)
+    if not args.json:
+        for result in results:
+            print(result)
+    else:
+        print(json.dumps([res.data for res in results]))
